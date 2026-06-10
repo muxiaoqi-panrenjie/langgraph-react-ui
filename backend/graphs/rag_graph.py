@@ -10,8 +10,8 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage
 
-from config import model, message_content_to_text
-from rag import rag_store
+from core.config import model, message_content_to_text
+from core.rag import rag_store
 
 
 # ============================================================

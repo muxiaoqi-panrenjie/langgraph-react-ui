@@ -3,7 +3,7 @@ import sys
 import os
 
 # 确保 backend 目录在路径中
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 print("Step 1: Importing os and sys...")
 print("Step 2: Importing dotenv...")

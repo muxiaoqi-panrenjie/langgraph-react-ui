@@ -17,7 +17,7 @@ from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, System
 from langchain_core.tools import tool
 from langchain.tools import ToolRuntime
 
-from config import db, model, in_memory_store, message_content_to_text
+from core.config import db, model, in_memory_store, message_content_to_text
 
 
 # ============================================================

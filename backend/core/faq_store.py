@@ -12,8 +12,8 @@ from sqlalchemy import Column, Integer, Text, DateTime, text, func
 from sqlalchemy.orm import DeclarativeBase, Session
 from pgvector.sqlalchemy import Vector
 
-from config import engine
-from rag import get_embeddings
+from core.config import engine
+from core.rag import get_embeddings
 
 
 # ============================================================

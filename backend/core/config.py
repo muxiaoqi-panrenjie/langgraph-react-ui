@@ -41,7 +41,7 @@ if postgres_url:
         engine = None
 
 if not engine:
-    db_path = os.path.join(os.path.dirname(__file__), "chinook.db")
+    db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "db", "chinook.db")
     engine = create_engine(f"sqlite:///{db_path}")
 
 db = SQLDatabase(engine)

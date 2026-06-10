@@ -2,8 +2,7 @@
 数据库初始化脚本。
 
 运行方式：
-    cd backend
-    python init_db.py
+    python backend/db/init_db.py
 
 功能：
     1. 创建 pgvector 扩展
@@ -11,7 +10,11 @@
     3. 导入初始 FAQ 种子数据（带向量嵌入）
 """
 
-from faq_store import init_faq_table, seed_faqs
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.faq_store import init_faq_table, seed_faqs
 
 
 def main():

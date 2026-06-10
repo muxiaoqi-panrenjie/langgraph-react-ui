@@ -12,8 +12,8 @@ from langgraph.types import interrupt
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 
-from config import model, message_content_to_text
-from faq_store import search_faq
+from core.config import model, message_content_to_text
+from core.faq_store import search_faq
 
 
 # FAQ 向量检索已迁移至 faq_store.py（基于 pgvector + PostgreSQL）

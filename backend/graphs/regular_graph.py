@@ -8,8 +8,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from config import State, message_content_to_text
-from tools import tools_by_name, regular_tools, hitl_tools
+from core.config import State, message_content_to_text
+from core.tools import tools_by_name, regular_tools, hitl_tools
 
 
 # ============================================================

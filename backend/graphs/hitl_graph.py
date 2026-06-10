@@ -7,9 +7,9 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import ToolMessage
 
-from config import State
-from regular_graph import assistant
-from tools import hitl_tools_by_name, hitl_tools
+from core.config import State
+from graphs.regular_graph import assistant
+from core.tools import hitl_tools_by_name, hitl_tools
 
 
 # ============================================================

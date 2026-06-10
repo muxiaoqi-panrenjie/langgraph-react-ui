@@ -12,13 +12,13 @@ main.py 通过此文件获取所需的图和函数，保持对外接口不变。
   customer_service.py — AI 客服自动回复（FAQ + 意图分类 + 人工兜底）
 """
 
-from config import message_content_to_text
-from tools import regular_tools, hitl_tools, hitl_tools_by_name
-from regular_graph import graph
-from hitl_graph import hitl_graph
-from multi_agent import multi_agent_graph, music_tools, invoice_tools
-from rag_graph import rag_graph
-from customer_service import customer_service_graph
+from core.config import message_content_to_text
+from core.tools import regular_tools, hitl_tools, hitl_tools_by_name
+from graphs.regular_graph import graph
+from graphs.hitl_graph import hitl_graph
+from graphs.multi_agent import multi_agent_graph, music_tools, invoice_tools
+from graphs.rag_graph import rag_graph
+from graphs.customer_service import customer_service_graph
 
 
 def get_tools_meta():

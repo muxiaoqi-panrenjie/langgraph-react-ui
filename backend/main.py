@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 # 导入图定义
 from agent import graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph, get_tools_meta, hitl_tools_by_name, message_content_to_text
-from rag import rag_store, split_text
+from core.rag import rag_store, split_text
 
 app = FastAPI(title="LangGraph Custom FastAPI Server")
 
