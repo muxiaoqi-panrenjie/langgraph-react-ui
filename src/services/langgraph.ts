@@ -54,7 +54,31 @@ export interface InterruptData {
 }
 
 /**
- * 用户审批决策
+ * 文档管理接口定义
+ */
+export interface RagDocument {
+  source: string;
+  chunk_count: number;
+}
+
+/**
+ * 文档切片接口定义
+ */
+export interface RagChunk {
+  chunk_id: string;
+  text: string;
+}
+
+/**
+ * 上传文档响应
+ */
+export interface RagUploadResponse {
+  chunk_count: number;
+  source: string;
+}
+
+/**
+ * 审批决策
  */
 export interface ApprovalDecision {
   action: "approve" | "reject" | "edit";
@@ -87,6 +111,9 @@ class LangGraphService {
       { assistant_id: "Deep Agent", name: "Deep Agent", graph_id: "regular" },
       { assistant_id: "Code Agent", name: "Code Agent", graph_id: "regular" },
       { assistant_id: "HITL Demo Agent", name: "HITL Demo Agent", graph_id: "hitl" },
+      { assistant_id: "Multi-Agent Assistant", name: "Multi-Agent Assistant", graph_id: "hitl" },
+      { assistant_id: "RAG Assistant", name: "RAG Assistant", graph_id: "rag" },
+      { assistant_id: "AI Customer Service", name: "AI 客服自动回复", graph_id: "hitl" },
     ];
   }
 
@@ -282,6 +309,70 @@ class LangGraphService {
       role: "assistant",
       content: mockReply,
     };
+  }
+
+  // --- RAG 文档管理 ---
+
+  /** 上传文档到 RAG 向量库 */
+  async uploadDocument(content: string, source: string): Promise<RagUploadResponse> {
+    const response = await fetch(`${BASE_URL}/api/rag/upload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, source }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "上传失败");
+    }
+    return await response.json();
+  }
+
+  /** 列出已上传的文档 */
+  async listDocuments(): Promise<RagDocument[]> {
+    try {
+      const response = await fetch(`${BASE_URL}/api/rag/documents`);
+      if (response.ok) return await response.json();
+      return [];
+    } catch (error) {
+      console.error("获取文档列表失败:", error);
+      return [];
+    }
+  }
+
+  /** 删除指定文档 */
+  async deleteDocument(source: string): Promise<void> {
+    const encodedSource = encodeURIComponent(source);
+    const response = await fetch(`${BASE_URL}/api/rag/documents/${encodedSource}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "删除失败");
+    }
+  }
+
+  /** 清空所有文档 */
+  async clearAllDocuments(): Promise<void> {
+    const response = await fetch(`${BASE_URL}/api/rag/documents`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "清空失败");
+    }
+  }
+
+  /** 获取指定文档的所有切片 */
+  async getDocumentChunks(source: string): Promise<RagChunk[]> {
+    const encodedSource = encodeURIComponent(source);
+    try {
+      const response = await fetch(`${BASE_URL}/api/rag/documents/${encodedSource}/chunks`);
+      if (response.ok) return await response.json();
+      return [];
+    } catch (error) {
+      console.error("获取文档切片失败:", error);
+      return [];
+    }
   }
 }
 

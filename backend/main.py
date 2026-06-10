@@ -7,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
 # 导入图定义
-from agent import graph, hitl_graph, get_tools_meta, hitl_tools_by_name
+from agent import graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph, get_tools_meta, hitl_tools_by_name, message_content_to_text
+from rag import rag_store, split_text
 
 app = FastAPI(title="LangGraph Custom FastAPI Server")
 
@@ -31,6 +32,9 @@ ALL_ASSISTANTS = [
     {"assistant_id": "Deep Agent", "name": "Deep Agent", "graph_id": "regular"},
     {"assistant_id": "Code Agent", "name": "Code Agent", "graph_id": "regular"},
     {"assistant_id": "HITL Demo Agent", "name": "HITL Demo Agent", "graph_id": "hitl"},
+    {"assistant_id": "Multi-Agent Assistant", "name": "Multi-Agent Assistant", "graph_id": "hitl"},
+    {"assistant_id": "RAG Assistant", "name": "RAG Assistant", "graph_id": "rag"},
+    {"assistant_id": "AI Customer Service", "name": "AI 客服自动回复", "graph_id": "hitl"},
 ]
 
 
@@ -53,11 +57,24 @@ async def get_thread_messages(thread_id: str):
     """获取线程历史消息。同时检查是否有待处理的中断。"""
     config = {"configurable": {"thread_id": thread_id}}
 
-    # 先尝试从 regular graph 获取状态
-    state = graph.get_state(config)
-    if not state.values.get("messages"):
-        # 再尝试从 hitl graph 获取
-        state = hitl_graph.get_state(config)
+    state = None
+    for g in [graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph]:
+        try:
+            s = g.get_state(config)
+            if s.values.get("messages"):
+                state = s
+                break
+        except Exception:
+            continue
+
+    if not state:
+        try:
+            state = multi_agent_graph.get_state(config)
+        except Exception:
+            try:
+                state = rag_graph.get_state(config)
+            except Exception:
+                return []
 
     messages = state.values.get("messages", [])
 
@@ -76,7 +93,7 @@ async def get_thread_messages(thread_id: str):
         formatted.append({
             "id": m.id,
             "role": role,
-            "content": m.content,
+            "content": message_content_to_text(m.content),
             "name": getattr(m, "name", None),
             "tool_calls": tool_calls
         })
@@ -95,7 +112,7 @@ async def get_interrupt(thread_id: str):
     """
     config = {"configurable": {"thread_id": thread_id}}
 
-    for g in [hitl_graph, graph]:
+    for g in [hitl_graph, graph, multi_agent_graph, rag_graph]:
         try:
             state = g.get_state(config)
             interrupts = state.tasks[0].interrupts if state.tasks else []
@@ -125,7 +142,16 @@ async def resume_execution(request: Request):
     config = {"configurable": {"thread_id": thread_id, "assistant_id": assistant_id}}
 
     # 确定使用哪个图
-    the_graph = hitl_graph if assistant_id in ["Email Agent", "HITL Demo Agent"] else graph
+    if assistant_id == "Multi-Agent Assistant":
+        the_graph = multi_agent_graph
+    elif assistant_id in ["Email Agent", "HITL Demo Agent"]:
+        the_graph = hitl_graph
+    elif assistant_id == "RAG Assistant":
+        the_graph = rag_graph
+    elif assistant_id == "AI Customer Service":
+        the_graph = customer_service_graph
+    else:
+        the_graph = graph
 
     # 从 LangGraph 的 Command 恢复执行
     from langgraph.types import Command
@@ -134,7 +160,7 @@ async def resume_execution(request: Request):
     # 获取最后一条消息内容
     messages = result.get("messages", [])
     last_msg = messages[-1] if messages else None
-    content = last_msg.content if last_msg else ""
+    content = message_content_to_text(last_msg.content) if last_msg else ""
 
     return {"content": content, "thread_id": thread_id}
 
@@ -151,8 +177,16 @@ async def chat_stream(request: Request):
     message = body.get("message")
 
     # 根据 assistant_id 决定使用哪个图
-    is_hitl = assistant_id in ["Email Agent", "HITL Demo Agent"]
-    the_graph = hitl_graph if is_hitl else graph
+    if assistant_id == "Multi-Agent Assistant":
+        the_graph = multi_agent_graph
+    elif assistant_id in ["Email Agent", "HITL Demo Agent"]:
+        the_graph = hitl_graph
+    elif assistant_id == "RAG Assistant":
+        the_graph = rag_graph
+    elif assistant_id == "AI Customer Service":
+        the_graph = customer_service_graph
+    else:
+        the_graph = graph
 
     config = {"configurable": {"thread_id": thread_id, "assistant_id": assistant_id}}
     inputs = {"messages": [{"role": "user", "content": message}]}
@@ -185,15 +219,15 @@ async def chat_stream(request: Request):
                 yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'status': status, 'toolName': tool_name})}\n\n"
 
                 # 2. 助手文本流式输出
-                if node_name == "assistant" and last_msg and last_msg.content:
-                    content = last_msg.content
+                if node_name in ["assistant", "supervisor", "rag_assistant", "llm_responder", "faq_retriever"] and last_msg and last_msg.content:
+                    content = message_content_to_text(last_msg.content)
                     for char in content:
                         yield f"data: {json.dumps({'type': 'token', 'text': char})}\n\n"
                         await asyncio.sleep(0.015)
 
         # 3. 执行完成后检查是否有中断
         config_check = {"configurable": {"thread_id": thread_id}}
-        for g in [hitl_graph, graph]:
+        for g in [hitl_graph, graph, multi_agent_graph, customer_service_graph]:
             try:
                 state = g.get_state(config_check)
                 tasks = state.tasks
@@ -213,6 +247,61 @@ async def chat_stream(request: Request):
 @app.get("/api/tools")
 async def list_tools():
     return get_tools_meta()
+
+
+# ----------------------------------------------------------
+# RAG 文档管理 API
+# ----------------------------------------------------------
+@app.post("/api/rag/upload")
+async def upload_document(request: Request):
+    """上传文档：切分段落 → 向量化 → 存入向量库。"""
+    body = await request.json()
+    content = body.get("content", "").strip()
+    source = body.get("source", "untitled").strip()
+
+    if not content:
+        return JSONResponse({"error": "文档内容不能为空"}, status_code=400)
+
+    # 切分段落
+    chunks = split_text(content)
+
+    # 向量化并入库
+    chunk_count = rag_store.add_documents(chunks, source)
+
+    return {"chunk_count": chunk_count, "source": source}
+
+
+@app.get("/api/rag/documents")
+async def list_documents():
+    """列出已上传的文档。"""
+    return rag_store.list_documents()
+
+
+@app.get("/api/rag/documents/{source}/chunks")
+async def get_document_chunks(source: str):
+    """获取指定文档的切片内容。"""
+    chunks = rag_store.get_document_chunks(source)
+    # 检查文档是否存在，防止返回空数组时分不清是空文档还是不存在的文档
+    existing_sources = [d["source"] for d in rag_store.list_documents()]
+    if source not in existing_sources:
+        return JSONResponse({"error": f"文档 {source} 不存在"}, status_code=404)
+    return chunks
+
+
+@app.delete("/api/rag/documents")
+async def clear_all_documents():
+    """清空所有文档。"""
+    rag_store.clear_all()
+    return {"message": "所有文档已清空"}
+
+
+@app.delete("/api/rag/documents/{source}")
+async def delete_document(source: str):
+    """删除指定文档。"""
+    success = rag_store.remove_document(source)
+    if success:
+        return {"message": f"文档 {source} 已删除"}
+    return JSONResponse({"error": f"文档 {source} 不存在"}, status_code=404)
 
 
 if __name__ == "__main__":

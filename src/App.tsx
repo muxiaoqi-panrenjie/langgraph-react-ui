@@ -3,6 +3,7 @@ import { AgentSelector } from "./components/AgentSelector";
 import { ChatWindow } from "./components/ChatWindow";
 import { StepTracker } from "./components/StepTracker";
 import { ApprovalModal } from "./components/ApprovalModal";
+import { RagPanel } from "./components/RagPanel";
 import {
   langGraphService,
   type Assistant,
@@ -11,6 +12,7 @@ import {
   type StreamStep,
   type InterruptData,
   type ApprovalDecision,
+  type RagDocument,
 } from "./services/langgraph";
 
 /**
@@ -39,6 +41,67 @@ export const App: React.FC = () => {
 
   // HITL 中断审批状态
   const [pendingInterrupt, setPendingInterrupt] = useState<InterruptData | null>(null);
+
+  // RAG 文档管理状态
+  const [ragDocuments, setRagDocuments] = useState<RagDocument[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+
+  // --- RAG 文档管理 ---
+
+  /** 刷新文档列表 */
+  const fetchRagDocuments = async () => {
+    try {
+      const docs = await langGraphService.listDocuments();
+      setRagDocuments(docs);
+    } catch (error) {
+      console.error("获取 RAG 文档列表失败:", error);
+    }
+  };
+
+  /** 上传文档 */
+  const handleUploadDocument = async (content: string, source: string) => {
+    if (!content.trim() || !source.trim()) return;
+    setIsUploading(true);
+    try {
+      await langGraphService.uploadDocument(content, source);
+      await fetchRagDocuments();
+    } catch (error) {
+      console.error("上传文档失败:", error);
+      alert("上传失败，请重试");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  /** 删除文档 */
+  const handleDeleteDocument = async (source: string) => {
+    try {
+      await langGraphService.deleteDocument(source);
+      await fetchRagDocuments();
+    } catch (error) {
+      console.error("删除文档失败:", error);
+      alert("删除失败，请重试");
+    }
+  };
+
+  /** 清空所有文档 */
+  const handleClearAllDocuments = async () => {
+    if (!window.confirm("确定要清空知识库中的所有文档吗？此操作不可恢复。")) return;
+    try {
+      await langGraphService.clearAllDocuments();
+      await fetchRagDocuments();
+    } catch (error) {
+      console.error("清空所有文档失败:", error);
+      alert("清空失败，请重试");
+    }
+  };
+
+  // 当切换到 RAG Assistant 时加载文档列表
+  useEffect(() => {
+    if (activeAssistant?.assistant_id === "RAG Assistant") {
+      fetchRagDocuments();
+    }
+  }, [activeAssistant?.assistant_id]);
 
   // --- 副作用与初始化逻辑 ---
 
@@ -294,14 +357,26 @@ export const App: React.FC = () => {
       />
 
       {/* 2. 中间面板：主聊天视窗与用户消息输入区域 */}
-      <ChatWindow
-        messages={messages}
-        activeAssistant={activeAssistant}
-        activeThreadId={activeThreadId}
-        onSendMessage={handleSendMessage}
-        isStreaming={isStreaming}
-        streamingReply={streamingReply}
-      />
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* RAG 文档管理面板（仅在选中 RAG Assistant 时显示） */}
+        {activeAssistant?.assistant_id === "RAG Assistant" && (
+          <RagPanel
+            documents={ragDocuments}
+            onUpload={handleUploadDocument}
+            onDelete={handleDeleteDocument}
+            onClearAll={handleClearAllDocuments}
+            isUploading={isUploading}
+          />
+        )}
+        <ChatWindow
+          messages={messages}
+          activeAssistant={activeAssistant}
+          activeThreadId={activeThreadId}
+          onSendMessage={handleSendMessage}
+          isStreaming={isStreaming}
+          streamingReply={streamingReply}
+        />
+      </div>
 
       {/* 3. 右侧面板：当前运行图节点与工具链流转动态追踪面板 */}
       <StepTracker steps={steps} isStreaming={isStreaming} />

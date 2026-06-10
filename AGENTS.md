@@ -34,7 +34,7 @@
 
 ## 前端约定
 
-- 前端运行在 Vite 上，默认开发命令是 `pnpm dev`。
+- 前端与后端可以通过一键命令 `pnpm dev` 并行启动（由 `start-dev.js` 驱动）。
 - 构建命令是 `pnpm build`。
 - 预览命令是 `pnpm preview`。
 - 代码风格遵循现有 React 组件拆分方式，优先复用 `src/components/` 和 `src/services/` 中的实现。

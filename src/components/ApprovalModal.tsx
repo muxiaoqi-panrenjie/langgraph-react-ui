@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import type { InterruptData, ApprovalDecision, Assistant } from "../services/langgraph";
-import { Shield, AlertTriangle, Mail, Trash2, ShoppingCart, Check, X, Edit3 } from "lucide-react";
+import { Shield, AlertTriangle, Mail, Trash2, ShoppingCart, Check, X, Edit3, Headphones } from "lucide-react";
 
 interface ApprovalModalProps {
   interrupt: InterruptData;
@@ -31,9 +31,15 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         Object.entries(interrupt.args).map(([k, v]) => [k, String(v)])
       )
     );
+    if (interrupt.tool_name === "human_agent_reply") {
+      setShowEditForm(true);
+    } else {
+      setShowEditForm(false);
+    }
   }, [interrupt]);
 
   const isHighSeverity = interrupt.severity === "high";
+  const isHumanReply = interrupt.tool_name === "human_agent_reply";
 
   // 根据工具类型选择图标和颜色
   const getIcon = () => {
@@ -45,6 +51,8 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         return <Trash2 className="w-5 h-5" />;
       case "make_purchase":
         return <ShoppingCart className="w-5 h-5" />;
+      case "human_agent_reply":
+        return <Headphones className="w-5 h-5" />;
       default:
         return <Shield className="w-5 h-5" />;
     }
@@ -59,6 +67,8 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         return "删除数据库";
       case "make_purchase":
         return "采购审批";
+      case "human_agent_reply":
+        return "人工客服回复";
       default:
         return interrupt.tool_name;
     }
@@ -90,7 +100,9 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
       <div
         className={`w-[480px] max-h-[80vh] overflow-y-auto rounded-2xl border shadow-2xl bg-[#13151a] ${
-          isHighSeverity
+          isHumanReply
+            ? "border-indigo-500/30 shadow-indigo-500/10"
+            : isHighSeverity
             ? "border-red-500/30 shadow-red-500/10"
             : "border-amber-500/30 shadow-amber-500/10"
         }`}
@@ -98,12 +110,18 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         {/* 头部 */}
         <div
           className={`px-6 py-4 border-b flex items-center gap-3 ${
-            isHighSeverity ? "border-red-500/20 bg-red-950/20" : "border-amber-500/20 bg-amber-950/20"
+            isHumanReply
+              ? "border-indigo-500/20 bg-indigo-950/20"
+              : isHighSeverity
+              ? "border-red-500/20 bg-red-950/20"
+              : "border-amber-500/20 bg-amber-950/20"
           }`}
         >
           <div
             className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-              isHighSeverity
+              isHumanReply
+                ? "bg-indigo-950/50 text-indigo-400 border border-indigo-500/20"
+                : isHighSeverity
                 ? "bg-red-950/50 text-red-400 border border-red-500/20"
                 : "bg-amber-950/50 text-amber-400 border border-amber-500/20"
             }`}
@@ -112,7 +130,11 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
           </div>
           <div className="flex-1">
             <h3 className="font-bold text-sm text-white">
-              {isHighSeverity ? "⚠️ 高风险操作审批" : "🔒 操作审批"}
+              {isHumanReply
+                ? "🎧 人工客服接入兜底"
+                : isHighSeverity
+                ? "⚠️ 高风险操作审批"
+                : "🔒 操作审批"}
             </h3>
             <p className="text-xxs text-slate-500 font-mono mt-0.5">
               智能体 ({assistant?.name}) 请求执行：{getToolLabel()}
@@ -122,6 +144,11 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
             <span className="flex items-center gap-1 text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/20 px-2 py-0.5 rounded-full">
               <AlertTriangle className="w-3 h-3" />
               HIGH
+            </span>
+          )}
+          {isHumanReply && (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-400 bg-indigo-950/40 border border-indigo-500/20 px-2 py-0.5 rounded-full">
+              HUMAN
             </span>
           )}
         </div>

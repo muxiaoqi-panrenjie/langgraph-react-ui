@@ -36,38 +36,42 @@
 
 ## 本地启动
 
-### 1. 启动后端
+### 1. 准备环境
 
-进入 `backend` 目录后安装 Python 依赖：
+- **后端依赖**：进入 `backend` 目录，创建并激活虚拟环境，然后安装 Python 依赖：
+  ```bash
+  cd backend
+  pip install -r requirements.txt
+  ```
+- **前端依赖**：在项目根目录下安装依赖：
+  ```bash
+  pnpm install
+  ```
 
-```bash
-cd backend
-pip install -r requirements.txt
-```
+### 2. 一键启动前后端
 
-启动服务：
-
-```bash
-python main.py
-```
-
-默认地址为 `http://127.0.0.1:8000`。
-
-### 2. 启动前端
-
-在项目根目录安装依赖：
-
-```bash
-pnpm install
-```
-
-启动开发服务：
+在项目根目录下执行以下命令，即可同时启动前端（Vite）和后端（FastAPI）服务：
 
 ```bash
 pnpm dev
 ```
 
-默认地址为 Vite 提供的本地开发地址。
+启动脚本会智能检测根目录下的 `.venv` 虚拟环境并使用其中的 Python 解释器启动后端，同时启动 Vite 前端开发服务器，并将两端的控制台输出合并打印（分别带有 `[Backend]` 和 `[Frontend]` 颜色前缀）。
+
+### 3. 单独启动（可选）
+
+如果需要单独启动前端或后端进行调试：
+
+- **单独启动后端**：
+  ```bash
+  cd backend
+  python main.py
+  ```
+- **单独启动前端**：
+  在项目根目录下直接使用 Vite 启动：
+  ```bash
+  npx vite
+  ```
 
 ## 环境变量
 
