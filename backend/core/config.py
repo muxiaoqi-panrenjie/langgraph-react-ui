@@ -10,6 +10,14 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv(override=True)
 
+# 避免代理软件（如 Clash）拦截导致阿里云 DashScope 连接发生 SSL UNEXPECTED_EOF 错误
+import os
+if "NO_PROXY" in os.environ:
+    if "dashscope.aliyuncs.com" not in os.environ["NO_PROXY"]:
+        os.environ["NO_PROXY"] += ",dashscope.aliyuncs.com"
+else:
+    os.environ["NO_PROXY"] = "dashscope.aliyuncs.com"
+
 from langgraph.graph.message import add_messages
 from langgraph.store.memory import InMemoryStore
 from langchain_core.messages import BaseMessage
