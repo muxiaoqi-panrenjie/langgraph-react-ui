@@ -313,6 +313,15 @@ export const App: React.FC = () => {
         decision
       );
 
+      // 更新执行步骤状态为已完成
+      setSteps(prev =>
+        prev.map(s =>
+          s.status === "interrupted"
+            ? { ...s, status: "completed" as const, timestamp: Date.now() }
+            : s
+        )
+      );
+
       // 将恢复后的结果追加到消息列表
       if (result.content) {
         const replyMsg: ChatMessage = {

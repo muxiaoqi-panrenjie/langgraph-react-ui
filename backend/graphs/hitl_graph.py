@@ -4,10 +4,9 @@ HITL 图：支持人工审批中断。
 """
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import ToolMessage
 
-from core.config import State
+from core.config import State, checkpointer
 from graphs.regular_graph import assistant
 from core.tools import hitl_tools_by_name, hitl_tools
 
@@ -61,5 +60,4 @@ hitl_workflow.add_conditional_edges("assistant", should_continue_hitl, {
 })
 hitl_workflow.add_edge("hitl_tool_node", "assistant")
 
-hitl_memory = MemorySaver()
-hitl_graph = hitl_workflow.compile(checkpointer=hitl_memory, name="hitl_graph")
+hitl_graph = hitl_workflow.compile(checkpointer=checkpointer, name="hitl_graph")

@@ -9,10 +9,9 @@ from typing import Annotated, TypedDict, Any, List
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 
-from core.config import model, message_content_to_text
+from core.config import model, message_content_to_text, checkpointer
 from core.faq_store import search_faq
 
 
@@ -218,8 +217,7 @@ customer_service_builder.add_conditional_edges(
 
 customer_service_builder.add_edge("human_backup", END)
 
-customer_service_memory = MemorySaver()
 customer_service_graph = customer_service_builder.compile(
-    checkpointer=customer_service_memory,
+    checkpointer=checkpointer,
     name="customer_service_graph"
 )

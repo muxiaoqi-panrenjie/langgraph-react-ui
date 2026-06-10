@@ -113,16 +113,20 @@ def split_text(text: str) -> list[str]:
 # --- Vector Store ---
 
 class RAGVectorStore:
-    """封装 InMemoryVectorStore，支持文档添加、查询、删除。"""
+    """封装 PGVector 向量存储，支持 PostgreSQL 持久化文档添加、查询、删除。"""
 
     def __init__(self):
-        self._store: Optional[InMemoryVectorStore] = None
-        # 记录 source -> chunk_ids 的映射，用于删除
-        self._source_index: dict[str, list[str]] = {}
+        self._store = None
 
-    def _get_store(self) -> InMemoryVectorStore:
+    def _get_store(self):
         if self._store is None:
-            self._store = InMemoryVectorStore(get_embeddings())
+            from langchain_postgres import PGVector
+            from core.config import postgres_url
+            self._store = PGVector(
+                embeddings=get_embeddings(),
+                collection_name="rag_documents",
+                connection=postgres_url
+            )
         return self._store
 
     def add_documents(self, texts: list[str], source: str) -> int:
@@ -131,7 +135,7 @@ class RAGVectorStore:
             return 0
 
         store = self._get_store()
-        chunk_ids: list[str] = []
+        docs = []
 
         for text in texts:
             chunk_id = str(uuid.uuid4())
@@ -139,11 +143,10 @@ class RAGVectorStore:
                 page_content=text,
                 metadata={"source": source, "chunk_id": chunk_id},
             )
-            store.add_documents([doc], ids=[chunk_id])
-            chunk_ids.append(chunk_id)
+            docs.append(doc)
 
-        self._source_index[source] = chunk_ids
-        return len(chunk_ids)
+        store.add_documents(docs)
+        return len(docs)
 
     def query(self, text: str, top_k: int = 5) -> list[Document]:
         """检索最相关的段落。"""
@@ -152,53 +155,68 @@ class RAGVectorStore:
         return results
 
     def list_documents(self) -> list[dict]:
-        """列出已上传的文档及其 chunk 数量。"""
-        return [
-            {"source": source, "chunk_count": len(chunk_ids)}
-            for source, chunk_ids in self._source_index.items()
-        ]
+        """从数据库查询已上传的文档及其 chunk 数量。"""
+        from core.config import engine
+        from sqlalchemy import text
+        query = text("""
+            SELECT cmetadata->>'source' AS source, COUNT(*) AS chunk_count
+            FROM langchain_pg_embedding
+            WHERE cmetadata->>'source' IS NOT NULL
+            GROUP BY cmetadata->>'source'
+        """)
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(query).fetchall()
+                return [{"source": row[0], "chunk_count": row[1]} for row in rows]
+        except Exception as e:
+            print(f"[RAG Store] Error listing documents: {e}")
+            return []
 
     def get_document_chunks(self, source: str) -> list[dict]:
         """获取指定文档的所有 chunk。"""
-        if source not in self._source_index:
+        from core.config import engine
+        from sqlalchemy import text
+        query = text("""
+            SELECT id, document
+            FROM langchain_pg_embedding
+            WHERE cmetadata->>'source' = :source
+        """)
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(query, {"source": source}).fetchall()
+                return [{"chunk_id": row[0], "text": row[1]} for row in rows]
+        except Exception as e:
+            print(f"[RAG Store] Error getting chunks: {e}")
             return []
-
-        chunk_ids = self._source_index[source]
-        store = self._get_store()
-        docs = store.docstore.mget(chunk_ids)
-        return [
-            {"chunk_id": doc.metadata.get("chunk_id"), "text": doc.page_content}
-            for doc in docs if doc
-        ]
 
     def remove_document(self, source: str) -> bool:
         """删除指定文档的所有 chunk。"""
-        if source not in self._source_index:
+        from core.config import engine
+        from sqlalchemy import text
+        query = text("""
+            DELETE FROM langchain_pg_embedding
+            WHERE cmetadata->>'source' = :source
+        """)
+        try:
+            with engine.connect() as conn:
+                res = conn.execute(query, {"source": source})
+                conn.commit()
+                return res.rowcount > 0
+        except Exception as e:
+            print(f"[RAG Store] Error removing document: {e}")
             return False
-
-        store = self._get_store()
-        chunk_ids = self._source_index.pop(source)
-
-        # InMemoryVectorStore 没有直接的 delete 方法，需要重建
-        # 重新创建 store，排除被删除的 chunk
-        all_docs = store.docstore.mget(list(store.index_to_docstore_id.values()))
-        remaining_docs = [
-            d for d in all_docs
-            if d and d.metadata.get("source") != source
-        ]
-        remaining_ids = [d.metadata["chunk_id"] for d in remaining_docs]
-
-        new_store = InMemoryVectorStore(get_embeddings())
-        if remaining_docs:
-            new_store.add_documents(remaining_docs, ids=remaining_ids)
-
-        self._store = new_store
-        return True
 
     def clear_all(self) -> None:
         """清空所有文档。"""
-        self._store = None
-        self._source_index.clear()
+        from core.config import engine
+        from sqlalchemy import text
+        query = text("DELETE FROM langchain_pg_embedding")
+        try:
+            with engine.connect() as conn:
+                conn.execute(query)
+                conn.commit()
+        except Exception as e:
+            print(f"[RAG Store] Error clearing: {e}")
 
 
 # 全局单例

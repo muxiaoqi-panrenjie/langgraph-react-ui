@@ -17,7 +17,7 @@ from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, System
 from langchain_core.tools import tool
 from langchain.tools import ToolRuntime
 
-from core.config import db, model, in_memory_store, message_content_to_text
+from core.config import db, model, in_memory_store, message_content_to_text, checkpointer
 
 
 # ============================================================
@@ -543,9 +543,8 @@ multi_agent_final.add_edge("load_memory", "supervisor")
 multi_agent_final.add_edge("supervisor", "create_memory")
 multi_agent_final.add_edge("create_memory", END)
 
-multi_agent_memory = MemorySaver()
 multi_agent_graph = multi_agent_final.compile(
-    checkpointer=multi_agent_memory,
+    checkpointer=checkpointer,
     store=in_memory_store,
     name="multi_agent_graph"
 )

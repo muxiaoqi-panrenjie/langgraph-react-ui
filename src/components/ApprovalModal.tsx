@@ -77,7 +77,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
   const handleApprove = () => {
     const decision: ApprovalDecision = {
       action: "approve",
-      ...interrupt.args,
+      ...(showEditForm ? editFields : interrupt.args),
     };
     onApprove(decision);
   };

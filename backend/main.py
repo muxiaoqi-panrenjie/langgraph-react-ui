@@ -5,6 +5,7 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
 
 # 导入图定义
 from agent import graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph, get_tools_meta, hitl_tools_by_name, message_content_to_text
@@ -60,7 +61,7 @@ async def get_thread_messages(thread_id: str):
     state = None
     for g in [graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph]:
         try:
-            s = g.get_state(config)
+            s = await g.aget_state(config)
             if s.values.get("messages"):
                 state = s
                 break
@@ -69,10 +70,10 @@ async def get_thread_messages(thread_id: str):
 
     if not state:
         try:
-            state = multi_agent_graph.get_state(config)
+            state = await multi_agent_graph.aget_state(config)
         except Exception:
             try:
-                state = rag_graph.get_state(config)
+                state = await rag_graph.aget_state(config)
             except Exception:
                 return []
 
@@ -114,7 +115,7 @@ async def get_interrupt(thread_id: str):
 
     for g in [hitl_graph, graph, multi_agent_graph, rag_graph]:
         try:
-            state = g.get_state(config)
+            state = await g.aget_state(config)
             interrupts = state.tasks[0].interrupts if state.tasks else []
             if interrupts:
                 interrupt_data = interrupts[0].value
@@ -155,7 +156,7 @@ async def resume_execution(request: Request):
 
     # 从 LangGraph 的 Command 恢复执行
     from langgraph.types import Command
-    result = the_graph.invoke(Command(resume=resume_data), config)
+    result = await the_graph.ainvoke(Command(resume=resume_data), config)
 
     # 获取最后一条消息内容
     messages = result.get("messages", [])
@@ -229,7 +230,7 @@ async def chat_stream(request: Request):
         config_check = {"configurable": {"thread_id": thread_id}}
         for g in [hitl_graph, graph, multi_agent_graph, customer_service_graph]:
             try:
-                state = g.get_state(config_check)
+                state = await g.aget_state(config_check)
                 tasks = state.tasks
                 if tasks and tasks[0].interrupts:
                     interrupt_data = tasks[0].interrupts[0].value
@@ -265,8 +266,8 @@ async def upload_document(request: Request):
     # 切分段落
     chunks = split_text(content)
 
-    # 向量化并入库
-    chunk_count = rag_store.add_documents(chunks, source)
+    # 向量化并入库 (通过 run_in_threadpool 保证异步安全)
+    chunk_count = await run_in_threadpool(rag_store.add_documents, chunks, source)
 
     return {"chunk_count": chunk_count, "source": source}
 
@@ -274,15 +275,16 @@ async def upload_document(request: Request):
 @app.get("/api/rag/documents")
 async def list_documents():
     """列出已上传的文档。"""
-    return rag_store.list_documents()
+    return await run_in_threadpool(rag_store.list_documents)
 
 
 @app.get("/api/rag/documents/{source}/chunks")
 async def get_document_chunks(source: str):
     """获取指定文档的切片内容。"""
-    chunks = rag_store.get_document_chunks(source)
+    chunks = await run_in_threadpool(rag_store.get_document_chunks, source)
     # 检查文档是否存在，防止返回空数组时分不清是空文档还是不存在的文档
-    existing_sources = [d["source"] for d in rag_store.list_documents()]
+    existing_docs = await run_in_threadpool(rag_store.list_documents)
+    existing_sources = [d["source"] for d in existing_docs]
     if source not in existing_sources:
         return JSONResponse({"error": f"文档 {source} 不存在"}, status_code=404)
     return chunks
@@ -291,14 +293,14 @@ async def get_document_chunks(source: str):
 @app.delete("/api/rag/documents")
 async def clear_all_documents():
     """清空所有文档。"""
-    rag_store.clear_all()
+    await run_in_threadpool(rag_store.clear_all)
     return {"message": "所有文档已清空"}
 
 
 @app.delete("/api/rag/documents/{source}")
 async def delete_document(source: str):
     """删除指定文档。"""
-    success = rag_store.remove_document(source)
+    success = await run_in_threadpool(rag_store.remove_document, source)
     if success:
         return {"message": f"文档 {source} 已删除"}
     return JSONResponse({"error": f"文档 {source} 不存在"}, status_code=404)

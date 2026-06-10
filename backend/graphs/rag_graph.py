@@ -7,10 +7,9 @@ from typing import Annotated, TypedDict
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage
 
-from core.config import model, message_content_to_text
+from core.config import model, message_content_to_text, checkpointer
 from core.rag import rag_store
 
 
@@ -80,8 +79,7 @@ rag_builder.add_node("rag_assistant", rag_assistant_node)
 rag_builder.add_edge(START, "rag_assistant")
 rag_builder.add_edge("rag_assistant", END)
 
-rag_memory = MemorySaver()
 rag_graph = rag_builder.compile(
-    checkpointer=rag_memory,
+    checkpointer=checkpointer,
     name="rag_graph"
 )

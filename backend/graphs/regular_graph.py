@@ -4,11 +4,10 @@ assistant 节点同时也被 HITL 图复用。
 """
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from core.config import State, message_content_to_text
+from core.config import State, message_content_to_text, checkpointer
 from core.tools import tools_by_name, regular_tools, hitl_tools
 
 
@@ -217,5 +216,4 @@ workflow.add_conditional_edges("assistant", should_continue, {
 })
 workflow.add_edge("tool_node", "assistant")
 
-memory = MemorySaver()
-graph = workflow.compile(checkpointer=memory, name="regular_graph")
+graph = workflow.compile(checkpointer=checkpointer, name="regular_graph")
