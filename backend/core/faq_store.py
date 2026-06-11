@@ -6,6 +6,7 @@ FAQ 向量存储模块 — 基于 pgvector + PostgreSQL。
 """
 
 from datetime import datetime
+from functools import lru_cache
 from typing import Optional
 
 from sqlalchemy import Column, Integer, Text, DateTime, text, func
@@ -43,6 +44,37 @@ _Base: Optional[type] = None
 _FaqItem: Optional[type] = None
 _embedding_dim: Optional[int] = None
 _initialized: bool = False
+
+
+def _normalize_query(text_value: str) -> str:
+    """Normalize FAQ queries so repeated equivalent inputs share one cache key."""
+    return " ".join((text_value or "").strip().lower().split())
+
+
+def find_seed_faq_answer(query_text: str) -> tuple[str, float]:
+    """Fast in-memory FAQ match for common customer-service wording."""
+    normalized_query = _normalize_query(query_text)
+    if not normalized_query:
+        return "", 0.0
+
+    for question, answer in SEED_FAQS.items():
+        if normalized_query == _normalize_query(question):
+            return answer, 1.0
+
+    keyword_groups = [
+        (("退款", "退费", "退钱", "refund"), "如何申请退款？"),
+        (("密码", "改密", "修改密码", "找回密码", "password"), "如何修改账户密码？"),
+        (("支付", "付款", "微信", "支付宝", "信用卡", "paypal", "pay"), "支持哪些支付方式？"),
+        (("下载", "已购", "购买的歌曲", "download"), "如何下载已购买的歌曲？"),
+        (("没声音", "无声音", "声音", "播放不了", "播放音乐没有声音"), "为什么播放音乐没有声音？"),
+        (("vip", "会员", "订阅", "开通", "升级", "subscribe", "subscription"), "如何升级为 VIP 会员？"),
+        (("锁定", "账号锁", "账户锁", "解锁", "locked"), "账号被锁定怎么办？"),
+    ]
+    for keywords, question in keyword_groups:
+        if any(keyword in normalized_query for keyword in keywords):
+            return SEED_FAQS[question], 0.98
+
+    return "", 0.0
 
 
 def _get_embedding_dim() -> int:
@@ -144,6 +176,7 @@ def seed_faqs():
             session.add(item)
 
         session.commit()
+        _search_faq_cached.cache_clear()
         print(f"[FAQ Store] 成功导入 {len(SEED_FAQS)} 条 FAQ 种子数据。")
 
 
@@ -160,13 +193,20 @@ def search_faq(query_text: str, threshold: float = 0.85) -> tuple[str, float]:
     Returns:
         (answer, score) 元组。未命中时返回 ("", best_score)。
     """
-    if not _is_postgres:
+    normalized_query = _normalize_query(query_text)
+    if not _is_postgres or not normalized_query:
         return "", 0.0
 
+    return _search_faq_cached(normalized_query, threshold)
+
+
+@lru_cache(maxsize=512)
+def _search_faq_cached(normalized_query: str, threshold: float) -> tuple[str, float]:
+    """Cached pgvector FAQ search for repeated customer-service questions."""
     try:
         _ensure_model()
         embeddings_model = get_embeddings()
-        query_vec = embeddings_model.embed_query(query_text)
+        query_vec = embeddings_model.embed_query(normalized_query)
 
         # pgvector 的 <=> 是余弦距离，similarity = 1 - distance
         with Session(engine) as session:
@@ -216,6 +256,7 @@ def add_faq(question: str, answer: str) -> bool:
             item = _FaqItem(question=question, answer=answer, embedding=embedding)
             session.add(item)
             session.commit()
+            _search_faq_cached.cache_clear()
             print(f"[FAQ Store] 新增 FAQ: {question[:30]}...")
             return True
     except Exception as e:
@@ -235,6 +276,7 @@ def delete_faq(faq_id: int) -> bool:
             if item:
                 session.delete(item)
                 session.commit()
+                _search_faq_cached.cache_clear()
                 print(f"[FAQ Store] 删除 FAQ id={faq_id}")
                 return True
             return False

@@ -1,6 +1,8 @@
+# Trigger uvicorn reload to pick up new .env variables
 import asyncio
 import datetime
 import json
+import time
 import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,24 +60,23 @@ async def get_thread_messages(thread_id: str):
     """获取线程历史消息。同时检查是否有待处理的中断。"""
     config = {"configurable": {"thread_id": thread_id}}
 
-    state = None
-    for g in [graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph]:
+    # 使用 asyncio.gather 并行查询所有图的状态，大幅缩短接口等待时间
+    graphs = [graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph]
+    
+    async def get_state_safe(g):
         try:
             s = await g.aget_state(config)
             if s.values.get("messages"):
-                state = s
-                break
+                return s
         except Exception:
-            continue
+            pass
+        return None
+
+    results = await asyncio.gather(*(get_state_safe(g) for g in graphs))
+    state = next((s for s in results if s is not None), None)
 
     if not state:
-        try:
-            state = await multi_agent_graph.aget_state(config)
-        except Exception:
-            try:
-                state = await rag_graph.aget_state(config)
-            except Exception:
-                return []
+        return []
 
     messages = state.values.get("messages", [])
 
@@ -112,21 +113,23 @@ async def get_interrupt(thread_id: str):
     如果有中断，返回中断信息供前端展示审批表单。
     """
     config = {"configurable": {"thread_id": thread_id}}
+    graphs = [hitl_graph, graph, multi_agent_graph, rag_graph, customer_service_graph]
 
-    for g in [hitl_graph, graph, multi_agent_graph, rag_graph]:
+    # 使用 asyncio.gather 并行检查所有图的待处理中断，以提供极致的响应性能
+    async def check_interrupt(g):
         try:
             state = await g.aget_state(config)
-            interrupts = state.tasks[0].interrupts if state.tasks else []
-            if interrupts:
-                interrupt_data = interrupts[0].value
-                return JSONResponse({
-                    "thread_id": thread_id,
-                    "interrupt": interrupt_data,
-                })
+            tasks = state.tasks
+            if tasks and tasks[0].interrupts:
+                return tasks[0].interrupts[0].value
         except Exception:
-            continue
+            pass
+        return None
 
-    return JSONResponse({"thread_id": thread_id, "interrupt": None})
+    results = await asyncio.gather(*(check_interrupt(g) for g in graphs))
+    interrupt_data = next((val for val in results if val is not None), None)
+
+    return JSONResponse({"thread_id": thread_id, "interrupt": interrupt_data})
 
 
 @app.post("/api/resume")
@@ -193,51 +196,96 @@ async def chat_stream(request: Request):
     inputs = {"messages": [{"role": "user", "content": message}]}
 
     async def event_generator():
-        async for chunk in the_graph.astream(inputs, config, stream_mode="updates"):
-            for node_name, node_output in chunk.items():
-                # 处理 LangGraph interrupt 信号：__interrupt__ 节点的 node_output 是 tuple，不是 dict
-                # 直接通知前端有中断，跳过正常消息处理
-                if node_name == "__interrupt__":
-                    interrupt_val = node_output[0].value if isinstance(node_output, tuple) and node_output else {}
-                    yield f"data: {json.dumps({'type': 'interrupt', 'interrupt': interrupt_val})}\n\n"
-                    continue
+        visible_nodes = {"assistant", "supervisor", "rag_assistant", "llm_responder", "faq_retriever"}
+        latest_visible_reply = ""
+        emitted_content = False
+        request_started_at = time.perf_counter()
+        last_update_at = request_started_at
+        print(f"[ChatStream] start assistant={assistant_id} thread={thread_id}")
 
-                # 其余节点的输出必须是 dict，否则跳过
-                if not isinstance(node_output, dict):
-                    continue
+        async for mode, chunk in the_graph.astream(inputs, config, stream_mode=["updates", "messages"]):
+            if mode == "updates":
+                for node_name, node_output in chunk.items():
+                    now = time.perf_counter()
+                    total_ms = (now - request_started_at) * 1000
+                    delta_ms = (now - last_update_at) * 1000
+                    last_update_at = now
+                    print(
+                        f"[ChatStream][Node:{node_name}] update total={total_ms:.0f}ms "
+                        f"delta={delta_ms:.0f}ms assistant={assistant_id}"
+                    )
 
-                messages = node_output.get("messages", [])
-                last_msg = messages[-1] if messages else None
+                    # 处理 LangGraph interrupt 信号：__interrupt__ 节点的 node_output 是 tuple，不是 dict
+                    # 直接通知前端有中断，跳过正常消息处理
+                    if node_name == "__interrupt__":
+                        interrupt_val = node_output[0].value if isinstance(node_output, tuple) and node_output else {}
+                        yield f"data: {json.dumps({'type': 'interrupt', 'interrupt': interrupt_val})}\n\n"
+                        continue
 
-                status = "completed"
-                tool_name = None
+                    # 其余节点的输出必须是 dict，否则跳过
+                    if not isinstance(node_output, dict):
+                        continue
 
-                if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                    status = "calling_tool"
-                    tool_name = ", ".join([tc["name"] for tc in last_msg.tool_calls])
+                    messages = node_output.get("messages", [])
+                    last_msg = messages[-1] if messages else None
+                    if node_name in visible_nodes and last_msg and getattr(last_msg, "type", "ai") in ("ai", "AIMessageChunk"):
+                        latest_visible_reply = message_content_to_text(last_msg.content)
 
-                # 1. 步骤变更通知
-                yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'status': status, 'toolName': tool_name})}\n\n"
+                    status = "completed"
+                    tool_name = None
 
-                # 2. 助手文本流式输出
-                if node_name in ["assistant", "supervisor", "rag_assistant", "llm_responder", "faq_retriever"] and last_msg and last_msg.content:
-                    content = message_content_to_text(last_msg.content)
-                    for char in content:
-                        yield f"data: {json.dumps({'type': 'token', 'text': char})}\n\n"
-                        await asyncio.sleep(0.015)
+                    if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+                        status = "calling_tool"
+                        tool_name = ", ".join([tc["name"] for tc in last_msg.tool_calls])
+
+                    # 1. 步骤变更通知
+                    yield f"data: {json.dumps({'type': 'step', 'node': node_name, 'status': status, 'toolName': tool_name})}\n\n"
+
+            elif mode == "messages":
+                msg, metadata = chunk
+                node_name = metadata.get("langgraph_node")
+                # 仅流式输出用户可见节点的回复内容，且排除 tool 类型的消息
+                if node_name in visible_nodes:
+                    if getattr(msg, "type", "ai") in ("ai", "AIMessageChunk"):
+                        content = message_content_to_text(msg.content)
+                        if content:
+                            emitted_content = True
+                            yield f"data: {json.dumps({'type': 'token', 'text': content})}\n\n"
+
+        if latest_visible_reply and not emitted_content:
+            yield f"data: {json.dumps({'type': 'token', 'text': latest_visible_reply})}\n\n"
+
+        total_ms = (time.perf_counter() - request_started_at) * 1000
+        print(f"[ChatStream] graph finished total={total_ms:.0f}ms assistant={assistant_id} thread={thread_id}")
 
         # 3. 执行完成后检查是否有中断
         config_check = {"configurable": {"thread_id": thread_id}}
-        for g in [hitl_graph, graph, multi_agent_graph, customer_service_graph]:
-            try:
-                state = await g.aget_state(config_check)
-                tasks = state.tasks
-                if tasks and tasks[0].interrupts:
-                    interrupt_data = tasks[0].interrupts[0].value
-                    yield f"data: {json.dumps({'type': 'interrupt', 'interrupt': interrupt_data})}\n\n"
-                    break
-            except Exception:
-                continue
+        # 优先检查当前运行的图，以获得极致的响应性能
+        try:
+            state = await the_graph.aget_state(config_check)
+            tasks = state.tasks
+            if tasks and tasks[0].interrupts:
+                interrupt_data = tasks[0].interrupts[0].value
+                yield f"data: {json.dumps({'type': 'interrupt', 'interrupt': interrupt_data})}\n\n"
+            elif assistant_id == "AI Customer Service":
+                return
+            else:
+                # 备用：并发检查其他图
+                other_graphs = [g for g in [hitl_graph, graph, multi_agent_graph, customer_service_graph] if g != the_graph]
+                async def check_g(g):
+                    try:
+                        s = await g.aget_state(config_check)
+                        if s.tasks and s.tasks[0].interrupts:
+                            return s.tasks[0].interrupts[0].value
+                    except Exception:
+                        pass
+                    return None
+                results = await asyncio.gather(*(check_g(g) for g in other_graphs))
+                interrupt_val = next((val for val in results if val is not None), None)
+                if interrupt_val:
+                    yield f"data: {json.dumps({'type': 'interrupt', 'interrupt': interrupt_val})}\n\n"
+        except Exception:
+            pass
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

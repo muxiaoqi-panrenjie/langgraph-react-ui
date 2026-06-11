@@ -31,6 +31,11 @@ from sqlalchemy import create_engine
 # ============================================================
 postgres_url = os.environ.get("POSTGRES_URL")
 
+if postgres_url:
+    # 优化：在 Windows 上，将 localhost 替换为 127.0.0.1 可免除 IPv6 & IPv4 双栈轮询导致的额外 3 秒连接超时时间
+    if "@localhost" in postgres_url:
+        postgres_url = postgres_url.replace("@localhost", "@127.0.0.1", 1)
+
 if postgres_url and postgres_url.startswith("postgresql://") and "+psycopg" not in postgres_url:
     postgres_url = postgres_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -60,11 +65,32 @@ db = SQLDatabase(engine)
 # ============================================================
 llm_model = os.environ.get("LLM_MODEL", "anthropic:qwen3.6-plus")
 llm_temperature = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
-llm_max_retries = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+llm_max_retries = int(os.environ.get("LLM_MAX_RETRIES", "1"))
+llm_max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "256"))
 
 try:
-    model = init_chat_model(llm_model, temperature=llm_temperature, max_retries=llm_max_retries)
-    print(f"[MODEL] LLM model initialized: {llm_model} (temp={llm_temperature}, retries={llm_max_retries})")
+    if llm_model.startswith("tongyi:"):
+        from langchain_community.chat_models import ChatTongyi
+        model_real_name = llm_model.split(":", 1)[1]
+        model = ChatTongyi(
+            model=model_real_name,
+            dashscope_api_key=os.environ.get("DASHSCOPE_API_KEY"),
+            temperature=llm_temperature,
+            streaming=True,
+            max_retries=llm_max_retries,
+            model_kwargs={"max_tokens": llm_max_tokens},
+        )
+    else:
+        # 优化：增加 timeout=8.0 限制，防止网络抖动时 LLM 请求无限期挂起；开启 streaming=True 支持流式输出，提升用户体验并解决长回复挂起感
+        model = init_chat_model(
+            llm_model,
+            temperature=llm_temperature,
+            max_retries=llm_max_retries,
+            max_tokens=llm_max_tokens,
+            timeout=8.0,
+            streaming=True,
+        )
+    print(f"[MODEL] LLM model initialized: {llm_model} (temp={llm_temperature}, retries={llm_max_retries}, max_tokens={llm_max_tokens})")
 except Exception as e:
     print(f"[MODEL] WARNING: Failed to initialize LLM model: {e}")
     model = None
@@ -75,32 +101,14 @@ except Exception as e:
 # ============================================================
 in_memory_store = InMemoryStore()
 
-checkpointer = None
+from langgraph.checkpoint.memory import MemorySaver
+
+# FastAPI 的 /api/chat/stream 使用 graph.astream()/aget_state()，需要异步兼容的 checkpointer。
+# 同步 PostgresSaver 不实现 aget_tuple，会在流式接口中抛 NotImplementedError。
+# PostgreSQL 仍用于 FAQ/RAG 数据；线程 checkpoint 暂用 MemorySaver 保证异步接口稳定。
+checkpointer = MemorySaver()
 postgres_pool = None
-
-if postgres_url:
-    try:
-        from psycopg_pool import ConnectionPool
-        from langgraph.checkpoint.postgres import PostgresSaver
-        
-        # psycopg3 ConnectionPool 不支持 "postgresql+psycopg://" 方案，因此需使用标准的 "postgresql://" 方案
-        pg_conn_url = postgres_url
-        if pg_conn_url.startswith("postgresql+psycopg://"):
-            pg_conn_url = pg_conn_url.replace("postgresql+psycopg://", "postgresql://", 1)
-        
-        # 使用连接池，并设置 autocommit=True 避免事务阻塞导致 CREATE INDEX 失败
-        postgres_pool = ConnectionPool(pg_conn_url, kwargs={"autocommit": True})
-        checkpointer = PostgresSaver(postgres_pool)
-        checkpointer.setup()
-        print("[CHECKPOINTER] PostgresSaver initialized successfully.")
-    except Exception as e:
-        print(f"[CHECKPOINTER] WARNING: Failed to initialize PostgresSaver: {e}")
-        checkpointer = None
-
-if not checkpointer:
-    from langgraph.checkpoint.memory import MemorySaver
-    checkpointer = MemorySaver()
-    print("[CHECKPOINTER] InMemory checkpointer (MemorySaver) fallback initialized.")
+print("[CHECKPOINTER] InMemory checkpointer (MemorySaver) initialized for async LangGraph streaming.")
 
 
 # ============================================================

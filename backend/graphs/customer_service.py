@@ -1,9 +1,10 @@
 """
 AI 客服自动回复系统。
-流程：意图分类 → FAQ 向量匹配（pgvector） → LLM 兜底回答 → 人工客服中断。
+流程：规则分流 → FAQ 向量匹配（pgvector） → LLM 兜底回答 → 人工客服中断。
 """
 
-import json
+import time
+from functools import wraps
 from typing import Annotated, TypedDict, Any, List
 
 from langgraph.graph import StateGraph, START, END
@@ -12,7 +13,7 @@ from langgraph.types import interrupt
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 
 from core.config import model, message_content_to_text, checkpointer
-from core.faq_store import search_faq
+from core.faq_store import find_seed_faq_answer, search_faq
 
 
 # FAQ 向量检索已迁移至 faq_store.py（基于 pgvector + PostgreSQL）
@@ -31,49 +32,55 @@ class CustomerServiceState(TypedDict, total=False):
 # ============================================================
 # 节点函数
 # ============================================================
+def log_node_time(func):
+    """Print per-node execution time for customer-service graph debugging."""
+    @wraps(func)
+    def wrapper(state: CustomerServiceState):
+        started_at = time.perf_counter()
+        print(f"[CustomerService][Node:{func.__name__}] start")
+        try:
+            result = func(state)
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            print(f"[CustomerService][Node:{func.__name__}] error after {elapsed_ms:.0f}ms: {e}")
+            raise
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(f"[CustomerService][Node:{func.__name__}] end elapsed={elapsed_ms:.0f}ms")
+        return result
+    return wrapper
+
+
+@log_node_time
 def classify_intent(state: CustomerServiceState):
-    """用 LLM 把用户意图分为 faq / complex / human 三类。"""
+    """快速规则分类，避免客服入口每轮都先调用一次 LLM。"""
     messages = state.get("messages", [])
     if not messages:
         return {"category": "complex"}
 
     last_message = message_content_to_text(messages[-1].content)
+    last_message_stripped = last_message.strip()
+    last_message_lower = last_message_stripped.lower()
 
-    prompt = f"""分析以下用户的最新输入，并将其分类为以下三种意图之一：
-1. "faq"：用户提问属于常见的简单咨询（如：退款、修改密码、支付方式、下载歌曲、播放无声音、VIP会员、账号锁定等）。
-2. "human"：用户明确要求转人工客服（如：找人工、接人工、转客服、人工服务、投诉等）。
-3. "complex"：其他复杂问题，如需要深入解答的业务咨询、音乐推荐、发票查询或多步骤对话。
+    # 规则 1：快速规则匹配人工客服
+    human_keywords = [
+        "找人工", "接人工", "转客服", "转接人工", "人工服务", "人工客服", "转人工", "人工回复",
+        "投诉", "人工处理", "人工介入", "human", "agent", "complaint",
+    ]
+    if any(kw in last_message_lower for kw in human_keywords):
+        print(f"[CustomerService] Rule-based intent classification: human")
+        return {"category": "human"}
 
-请严格仅输出以下 JSON 格式，不要包含任何 markdown 标记（如 ```json）或额外文字：
-{{
-  "category": "faq" 或 "complex" 或 "human"
-}}
+    # 规则 2：常见 FAQ 快速命中，跳过大模型和向量检索
+    faq_answer, _ = find_seed_faq_answer(last_message_stripped)
+    if faq_answer:
+        print("[CustomerService] Rule-based intent classification (seed FAQ match): faq")
+        return {"category": "faq"}
 
-用户输入："{last_message}"
-"""
-    try:
-        response = model.invoke([SystemMessage(content=prompt)])
-        content = message_content_to_text(response.content).strip().lower()
-
-        if content.startswith("```"):
-            lines = content.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].strip() == "```":
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
-
-        data = json.loads(content)
-        category = data.get("category", "complex")
-        if category not in ["faq", "complex", "human"]:
-            category = "complex"
-        print(f"[CustomerService] Classified user intent as: {category}")
-        return {"category": category}
-    except Exception as e:
-        print(f"[CustomerService] Intent classification error: {e}")
-        return {"category": "complex"}
+    # 未命中明确人工或精确 FAQ 时，先进入 FAQ 检索；未命中再由 LLM 兜底。
+    return {"category": "complex"}
 
 
+@log_node_time
 def faq_retriever(state: CustomerServiceState):
     """FAQ 检索节点：命中则直接回答，未命中降级给 LLM。"""
     category = state.get("category", "complex")
@@ -85,8 +92,24 @@ def faq_retriever(state: CustomerServiceState):
         return {"faq_answer": "", "confidence": 0.0}
 
     question = message_content_to_text(messages[-1].content)
+    question_stripped = question.strip()
+
+    # 优先匹配内存中的 FAQ 和常见问法，避免网络/数据库开销
+    answer, seed_score = find_seed_faq_answer(question_stripped)
+    if answer:
+        print(f"[CustomerService] Exact FAQ match for '{question_stripped}'")
+        faq_msg = AIMessage(content=f"【FAQ标准解答】\n{answer}")
+        return {
+            "faq_answer": answer,
+            "confidence": seed_score,
+            "messages": [faq_msg]
+        }
+
+    started_at = time.perf_counter()
     answer, score = search_faq(question)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
     print(f"[CustomerService] FAQ lookup for '{question}': score={score:.4f}, hit={bool(answer)}")
+    print(f"[CustomerService] FAQ lookup elapsed: {elapsed_ms:.0f}ms")
 
     if answer:
         faq_msg = AIMessage(content=f"【FAQ标准解答】\n{answer}")
@@ -106,16 +129,23 @@ def faq_retriever(state: CustomerServiceState):
         }
 
 
+@log_node_time
 def llm_responder(state: CustomerServiceState):
     """复杂问题兜底：用 LLM 生成详细回答。"""
     if state.get("faq_answer"):
         return {}
 
-    messages = state.get("messages", [])
-    system_prompt = """你是数字音乐商店的专家客服代表。请根据用户的上下文，友好、专业、详尽地回答用户的问题。
-如果用户提问的内容超出了你的服务能力，或者你需要手动查询核心机密数据，你可以在回复的末尾加上：[建议转接人工客服]"""
+    messages = state.get("messages", [])[-6:]
+    system_prompt = """你是数字音乐商店客服。请用中文简洁回答，优先给可执行步骤。
+要求：
+1. 回复控制在 120 字以内。
+2. 不要展开无关背景。
+3. 如果需要人工查询订单、账号或机密数据，在末尾加：[建议转接人工客服]"""
     try:
+        started_at = time.perf_counter()
         response = model.invoke([SystemMessage(content=system_prompt)] + messages)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(f"[CustomerService] LLM responder elapsed: {elapsed_ms:.0f}ms")
         content = message_content_to_text(response.content)
         if "[建议转接人工客服]" in content:
             print("[CustomerService] LLM suggested escalating to human agent via tag.")
@@ -133,6 +163,7 @@ def llm_responder(state: CustomerServiceState):
         }
 
 
+@log_node_time
 def human_backup(state: CustomerServiceState):
     """人工兜底：通过 interrupt() 暂停，等待人工客服输入。"""
     messages = state.get("messages", [])

@@ -51,7 +51,7 @@ class DashScopeMultimodalEmbeddings(Embeddings):
                     ]
                 }
             }
-            resp = requests.post(self.url, headers=headers, json=data, verify=False, timeout=15)
+            resp = requests.post(self.url, headers=headers, json=data, verify=False, timeout=5)
             if resp.status_code == 200:
                 res_json = resp.json()
                 embedding = res_json["output"]["embeddings"][0]["embedding"]
@@ -75,12 +75,12 @@ def get_embeddings() -> Embeddings:
     global _embeddings
     if _embeddings is None:
         api_key = os.environ.get("DASHSCOPE_API_KEY")
-        model_name = os.environ.get("DASHSCOPE_EMBEDDING_MODEL") or "tongyi-embedding-vision-plus-2026-03-06"
+        model_name = os.environ.get("DASHSCOPE_EMBEDDING_MODEL") or "text-embedding-v3"
         if not api_key:
             # 兼容旧版本，降级读取 ANTHROPIC_API_KEY
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             
-        if api_key and (api_key.startswith("sk-de") or model_name == "tongyi-embedding-vision-plus-2026-03-06"):
+        if api_key and model_name == "tongyi-embedding-vision-plus-2026-03-06":
             # 用户提供的多模态向量模型专有 Key 或模型
             _embeddings = DashScopeMultimodalEmbeddings(
                 model=model_name,
@@ -89,7 +89,7 @@ def get_embeddings() -> Embeddings:
         else:
             # 备用：默认的 DashScopeEmbeddings
             _embeddings = DashScopeEmbeddings(
-                model="text-embedding-v3",
+                model=model_name,
                 dashscope_api_key=api_key,
             )
     return _embeddings
@@ -120,8 +120,14 @@ class RAGVectorStore:
 
     def _get_store(self):
         if self._store is None:
+            from core.config import engine, postgres_url
+            # 如果数据库不是 PostgreSQL (例如降级为了 SQLite 或连接失败)，
+            # 我们直接抛出友好异常，避免由于 TCP timeout 导致整个后台线程被挂起 30 秒
+            is_postgres = engine is not None and engine.dialect.name == "postgresql"
+            if not is_postgres:
+                raise RuntimeError("PostgreSQL 数据库未连接，RAG 向量存储不可用")
+
             from langchain_postgres import PGVector
-            from core.config import postgres_url
             self._store = PGVector(
                 embeddings=get_embeddings(),
                 collection_name="rag_documents",
