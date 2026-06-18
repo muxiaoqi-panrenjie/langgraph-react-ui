@@ -19,6 +19,7 @@ from graphs.hitl_graph import hitl_graph
 from graphs.multi_agent import multi_agent_graph, music_tools, invoice_tools
 from graphs.rag_graph import rag_graph
 from graphs.customer_service import customer_service_graph
+from graphs.resume_screener import resume_screener_graph
 
 
 def get_tools_meta():

@@ -105,15 +105,16 @@ class LangGraphService {
 
   private getFallbackAssistants(): Assistant[] {
     return [
-      { assistant_id: "101 Weather Agent", name: "101 Weather Agent", graph_id: "regular" },
-      { assistant_id: "Email Agent", name: "Email Agent (HITL)", graph_id: "hitl" },
-      { assistant_id: "Research Agent", name: "Research Agent", graph_id: "regular" },
-      { assistant_id: "Deep Agent", name: "Deep Agent", graph_id: "regular" },
-      { assistant_id: "Code Agent", name: "Code Agent", graph_id: "regular" },
-      { assistant_id: "HITL Demo Agent", name: "HITL Demo Agent", graph_id: "hitl" },
-      { assistant_id: "Multi-Agent Assistant", name: "Multi-Agent Assistant", graph_id: "hitl" },
-      { assistant_id: "RAG Assistant", name: "RAG Assistant", graph_id: "rag" },
+      { assistant_id: "101 Weather Agent", name: "101 天气查询助手", graph_id: "regular" },
+      { assistant_id: "Email Agent", name: "邮件审批助手", graph_id: "hitl" },
+      { assistant_id: "Research Agent", name: "文献研究助手", graph_id: "regular" },
+      { assistant_id: "Deep Agent", name: "深度推理助手", graph_id: "regular" },
+      { assistant_id: "Code Agent", name: "代码开发助手", graph_id: "regular" },
+      { assistant_id: "HITL Demo Agent", name: "人工审批演示", graph_id: "hitl" },
+      { assistant_id: "Multi-Agent Assistant", name: "多智能体客服系统", graph_id: "hitl" },
+      { assistant_id: "RAG Assistant", name: "知识库问答助手", graph_id: "rag" },
       { assistant_id: "AI Customer Service", name: "AI 客服自动回复", graph_id: "hitl" },
+      { assistant_id: "Resume Screener AI", name: "简历筛选 AI", graph_id: "hitl" },
     ];
   }
 

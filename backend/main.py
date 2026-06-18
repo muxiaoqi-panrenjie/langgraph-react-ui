@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.concurrency import run_in_threadpool
 
 # 导入图定义
-from agent import graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph, get_tools_meta, hitl_tools_by_name, message_content_to_text
+from agent import graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph, resume_screener_graph, get_tools_meta, hitl_tools_by_name, message_content_to_text
 from core.rag import rag_store, split_text
 
 app = FastAPI(title="LangGraph Custom FastAPI Server")
@@ -29,15 +29,16 @@ app.add_middleware(
 # Assistant 列表 - 新增 HITL Demo Agent
 # ----------------------------------------------------------
 ALL_ASSISTANTS = [
-    {"assistant_id": "101 Weather Agent", "name": "101 Weather Agent", "graph_id": "regular"},
-    {"assistant_id": "Email Agent", "name": "Email Agent (HITL)", "graph_id": "hitl"},
-    {"assistant_id": "Research Agent", "name": "Research Agent", "graph_id": "regular"},
-    {"assistant_id": "Deep Agent", "name": "Deep Agent", "graph_id": "regular"},
-    {"assistant_id": "Code Agent", "name": "Code Agent", "graph_id": "regular"},
-    {"assistant_id": "HITL Demo Agent", "name": "HITL Demo Agent", "graph_id": "hitl"},
-    {"assistant_id": "Multi-Agent Assistant", "name": "Multi-Agent Assistant", "graph_id": "hitl"},
-    {"assistant_id": "RAG Assistant", "name": "RAG Assistant", "graph_id": "rag"},
+    {"assistant_id": "101 Weather Agent", "name": "101 天气查询助手", "graph_id": "regular"},
+    {"assistant_id": "Email Agent", "name": "邮件审批助手", "graph_id": "hitl"},
+    {"assistant_id": "Research Agent", "name": "文献研究助手", "graph_id": "regular"},
+    {"assistant_id": "Deep Agent", "name": "深度推理助手", "graph_id": "regular"},
+    {"assistant_id": "Code Agent", "name": "代码开发助手", "graph_id": "regular"},
+    {"assistant_id": "HITL Demo Agent", "name": "人工审批演示", "graph_id": "hitl"},
+    {"assistant_id": "Multi-Agent Assistant", "name": "多智能体客服系统", "graph_id": "hitl"},
+    {"assistant_id": "RAG Assistant", "name": "知识库问答助手", "graph_id": "rag"},
     {"assistant_id": "AI Customer Service", "name": "AI 客服自动回复", "graph_id": "hitl"},
+    {"assistant_id": "Resume Screener AI", "name": "简历筛选 AI", "graph_id": "hitl"},
 ]
 
 
@@ -61,7 +62,7 @@ async def get_thread_messages(thread_id: str):
     config = {"configurable": {"thread_id": thread_id}}
 
     # 使用 asyncio.gather 并行查询所有图的状态，大幅缩短接口等待时间
-    graphs = [graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph]
+    graphs = [graph, hitl_graph, multi_agent_graph, rag_graph, customer_service_graph, resume_screener_graph]
     
     async def get_state_safe(g):
         try:
@@ -113,7 +114,7 @@ async def get_interrupt(thread_id: str):
     如果有中断，返回中断信息供前端展示审批表单。
     """
     config = {"configurable": {"thread_id": thread_id}}
-    graphs = [hitl_graph, graph, multi_agent_graph, rag_graph, customer_service_graph]
+    graphs = [hitl_graph, graph, multi_agent_graph, rag_graph, customer_service_graph, resume_screener_graph]
 
     # 使用 asyncio.gather 并行检查所有图的待处理中断，以提供极致的响应性能
     async def check_interrupt(g):
@@ -154,6 +155,8 @@ async def resume_execution(request: Request):
         the_graph = rag_graph
     elif assistant_id == "AI Customer Service":
         the_graph = customer_service_graph
+    elif assistant_id == "Resume Screener AI":
+        the_graph = resume_screener_graph
     else:
         the_graph = graph
 
@@ -189,6 +192,8 @@ async def chat_stream(request: Request):
         the_graph = rag_graph
     elif assistant_id == "AI Customer Service":
         the_graph = customer_service_graph
+    elif assistant_id == "Resume Screener AI":
+        the_graph = resume_screener_graph
     else:
         the_graph = graph
 
@@ -196,7 +201,7 @@ async def chat_stream(request: Request):
     inputs = {"messages": [{"role": "user", "content": message}]}
 
     async def event_generator():
-        visible_nodes = {"assistant", "supervisor", "rag_assistant", "llm_responder", "faq_retriever"}
+        visible_nodes = {"assistant", "supervisor", "rag_assistant", "llm_responder", "faq_retriever", "classify_and_store", "generate_final_report"}
         latest_visible_reply = ""
         emitted_content = False
         request_started_at = time.perf_counter()
@@ -271,7 +276,7 @@ async def chat_stream(request: Request):
                 return
             else:
                 # 备用：并发检查其他图
-                other_graphs = [g for g in [hitl_graph, graph, multi_agent_graph, customer_service_graph] if g != the_graph]
+                other_graphs = [g for g in [hitl_graph, graph, multi_agent_graph, customer_service_graph, resume_screener_graph] if g != the_graph]
                 async def check_g(g):
                     try:
                         s = await g.aget_state(config_check)

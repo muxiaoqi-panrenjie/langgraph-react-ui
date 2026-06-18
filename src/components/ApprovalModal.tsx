@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import type { InterruptData, ApprovalDecision, Assistant } from "../services/langgraph";
-import { Shield, AlertTriangle, Mail, Trash2, ShoppingCart, Check, X, Edit3, Headphones } from "lucide-react";
+import { Shield, AlertTriangle, Mail, Trash2, ShoppingCart, Check, X, Edit3, Headphones, UserCheck } from "lucide-react";
 
 interface ApprovalModalProps {
   interrupt: InterruptData;
@@ -53,6 +53,8 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         return <ShoppingCart className="w-5 h-5" />;
       case "human_agent_reply":
         return <Headphones className="w-5 h-5" />;
+      case "resume_screening":
+        return <UserCheck className="w-5 h-5" />;
       default:
         return <Shield className="w-5 h-5" />;
     }
@@ -69,6 +71,8 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
         return "采购审批";
       case "human_agent_reply":
         return "人工客服回复";
+      case "resume_screening":
+        return "简历筛查决定";
       default:
         return interrupt.tool_name;
     }
